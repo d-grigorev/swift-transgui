@@ -1,0 +1,19 @@
+SwiftTransGUI
+=============
+
+This entire codebase — Swift/SwiftUI sources, build scripts, tests and
+documentation — was rewritten entirely by the AI language model
+MiMo-V2.6-Flash (model ID: mimo-v2.6-flash) without human programming
+input.
+
+The user interface and user experience are modeled on Transmission Remote
+GUI (https://github.com/transmission-remote-gui/transgui), which is
+Copyright (c) 2008-2019 Yury Sidorov and the Transmission Remote GUI
+working group, licensed under the GNU General Public License version 2 or
+later. No source code from that project was reused; only its UI strings,
+layout and workflow were mirrored, with an original Swift/SwiftUI
+architecture.
+
+SwiftTransGUI is licensed under the GNU General Public License, version 2
+or later — the same license as the reference project. See the LICENSE file
+for the full license text.

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build, test, bundle
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      # The package targets macOS 26 / Swift 6. Runners may ship several
+      # Xcode versions: prefer a 26.x installation when present.
+      - name: Select Xcode 26+
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$LATEST" ]; then
+            echo "Selecting $LATEST"
+            sudo xcode-select -s "$LATEST"
+          fi
+          xcodebuild -version
+
+      - name: Require Xcode 26 (macOS 26 SDK)
+        run: |
+          MAJOR=$(xcodebuild -version | awk '/^Xcode/{print $2}' | cut -d. -f1)
+          if [ -z "$MAJOR" ] || [ "$MAJOR" -lt 26 ]; then
+            echo "::error::Xcode 26+ is required (package platform is macOS 26). Found: $(xcodebuild -version | head -1). Bump the runner image (e.g. runs-on: macos-26) or install Xcode 26."
+            exit 1
+          fi
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Assemble app bundle
+        run: ./Scripts/make-app.sh
+
+      # The app bundle is only available for manual runs (push builds stay lean).
+      - name: Upload app artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwiftTransGUI.app
+          path: build/SwiftTransGUI.app
+          retention-days: 7
