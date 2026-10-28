@@ -16,6 +16,7 @@ struct ApplicationOptionsSheet: View {
     @State private var promptDownloadOptions = AppSettings.promptDownloadOptions
     @State private var deleteTorrentFile = AppSettings.deleteTorrentFile
     @State private var linksFromClipboard = AppSettings.linksFromClipboard
+    @State private var disableTray = AppSettings.disableTray
 
     // Misc
     @State private var speedMenuDown = AppSettings.speedMenuDown
@@ -86,6 +87,18 @@ struct ApplicationOptionsSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(4)
                 }
+
+                GroupBox("Tray icon") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Disable tray", isOn: $disableTray)
+                            .help(
+                                "Hide the menu-bar tray icon; closing the window "
+                                    + "exits the application instead of hiding it."
+                            )
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -148,6 +161,10 @@ struct ApplicationOptionsSheet: View {
         AppSettings.linksFromClipboard = linksFromClipboard
         AppSettings.speedMenuDown = speedMenuDown
         AppSettings.speedMenuUp = speedMenuUp
+        AppSettings.disableTray = disableTray
+        // Takes effect immediately — the icon disappears/reappears and the
+        // close behavior flips without a restart.
+        TrayStatusController.shared.setEnabled(!disableTray)
         dismiss()
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TransGUICore
 
@@ -42,7 +43,7 @@ struct FilesDetailsView: View {
                     TableColumn("Priority", value: \FileTreeRow.prioritySort) { row in
                         priorityCell(row)
                     }
-                    .width(min: 70, ideal: 90)
+                    .width(min: 70, ideal: 80, max: 110)
                 }
                 // Tighter vertical rhythm: no extra automatic row padding and
                 // small controls (checkbox / priority popup).
@@ -94,18 +95,70 @@ struct FilesDetailsView: View {
     @ViewBuilder
     private func priorityCell(_ row: FileTreeRow) -> some View {
         if row.isFolder {
-            Text(row.priority.map(priorityText) ?? "")
-                .foregroundStyle(.secondary)
+            // Uniform folder priority gets the same colored badge; mixed
+            // folders stay blank like before.
+            if let priority = row.priority {
+                priorityBadge(priorityText(priority), priority: priority)
+            }
         } else if let index = row.fileIndex {
+            let priority = row.priority ?? 0
             Menu {
                 Button("skip") { setPriority(-1000, index: index) }
                 Button("low") { setPriority(-1, index: index) }
                 Button("normal") { setPriority(0, index: index) }
                 Button("high") { setPriority(1, index: index) }
             } label: {
-                Text(priorityText(row.priority ?? 0))
+                Text(priorityText(priority))
+                    .lineLimit(1)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
             }
             .controlSize(.small)
+            .menuStyle(.borderlessButton)
+            .foregroundStyle(.primary)
+            // One shared width for every row's dropdown (ruler: "normal").
+            .frame(width: Self.priorityCellWidth)
+            .background(
+                priorityColor(priority).opacity(0.25),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+        }
+    }
+
+    /// Uniform priority-cell width: the word "normal" in the menu font plus
+    /// badge padding and the menu chevron — every dropdown and folder badge
+    /// in the column uses this one ruler, so all rows line up.
+    static let priorityCellWidth: CGFloat = {
+        let textWidth = ("normal" as NSString)
+            .size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width
+        return ceil(textWidth) + 12 /* badge padding */ + 14 /* chevron + gap */
+    }()
+
+    static let priorityTextWidth: CGFloat = priorityCellWidth - 12
+
+    /// Compact, value-colored priority badge:
+    /// skip = gray, low = light blue, normal = light green, high = light red.
+    /// Tints are opacity-based so they read as "light" colors in light mode
+    /// and stay legible in dark mode.
+    private func priorityBadge(_ text: String, priority: Int) -> some View {
+        Text(text)
+            .lineLimit(1)
+            .frame(width: Self.priorityTextWidth, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .foregroundStyle(.primary)
+            .background(
+                priorityColor(priority).opacity(0.25),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+    }
+
+    private func priorityColor(_ priority: Int) -> Color {
+        switch priority {
+        case ..<(-999): .gray  // skip (-1000)
+        case ..<0: .blue  // low (-1)
+        case 1...: .red  // high
+        default: .green  // normal (0)
         }
     }
 
@@ -143,13 +196,23 @@ struct FilesDetailsView: View {
 
     private func wantedBinding(_ row: FileTreeRow) -> Binding<Bool> {
         Binding(
-            get: { row.wanted },
-            set: { newValue in
+            // The checkmark mirrors the priority: skip → off, low/normal/high
+            // → on.
+            get: { row.priority != -1000 },
+            set: { checked in
                 guard let index = row.fileIndex,
                     let id = model.selection.sorted().first
                 else { return }
                 Task {
-                    await model.setFileWanted(indices: [index], wanted: newValue, torrentId: id)
+                    if checked {
+                        // on → wanted with normal priority
+                        await model.setFileWanted(
+                            indices: [index], wanted: true, torrentId: id)
+                    } else {
+                        // off → skip (files-unwanted)
+                        await model.setFilePriority(
+                            indices: [index], priority: -1000, torrentId: id)
+                    }
                 }
             }
         )

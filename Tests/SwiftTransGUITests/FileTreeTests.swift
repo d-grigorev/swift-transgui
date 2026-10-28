@@ -52,11 +52,12 @@ struct FileTreeTests {
         #expect(folderA.priority == nil)  // 1 and 0 mixed
         let folderB = rows[4]
         #expect(folderB.size == 200)
-        #expect(folderB.priority == -1)  // uniform
+        // Its only file is unwanted → effective priority is skip (-1000).
+        #expect(folderB.priority == -1000)
 
-        // File rows carry per-file wanted/priority.
+        // File rows carry per-file wanted/priority (unwanted ⇒ skip).
         #expect(rows[2].wanted && rows[2].priority == 1)
-        #expect(!rows[5].wanted && rows[5].priority == -1)
+        #expect(!rows[5].wanted && rows[5].priority == -1000)
     }
 
     @Test("Collapsed folders hide their children")

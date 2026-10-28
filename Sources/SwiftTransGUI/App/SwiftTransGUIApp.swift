@@ -21,6 +21,9 @@ enum Key {
 
 @main
 struct SwiftTransGUIApp: App {
+    /// Tray/dock policy (hide-instead-of-close, dock-icon restore) — see
+    /// `TraySupport.swift`.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
 
     var body: some Scene {

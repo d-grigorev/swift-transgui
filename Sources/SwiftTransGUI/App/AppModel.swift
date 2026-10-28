@@ -155,6 +155,10 @@ final class AppModel {
     /// notifies).
     private var previousStatuses: [Int: Int] = [:]
 
+    /// Set by `launch()` so a re-running window `.task` cannot connect twice
+    /// (observed: duplicate startup log lines from a double task run).
+    private var didLaunch = false
+
     /// UserDefaults key of the persisted table column customization.
     static let columnCustomizationKey = "TorrentColumnCustomization"
 
@@ -249,9 +253,44 @@ final class AppModel {
     /// torrent-start action `start(ids:)` — Swift prefers the zero-argument
     /// overload, which silently turned the Start buttons into this method.
     func launch() async {
+        DebugRPCEnv.applyEndpointOverride(to: &endpoint)
+        // The window's `.task` can re-run (view re-attachment) — connect once.
+        guard !didLaunch else { return }
+        didLaunch = true
         guard endpoint.isConfigured else { return }
-        if Keychain.load(account: endpoint.keychainAccount) != nil {
-            await connect()
+        // Defer the Keychain access (and any password prompt that may follow
+        // it) until the main window is actually on screen: this startup
+        // `.task` can start before the window is ordered in, and Keychain
+        // work on the main actor mid-display stalls the whole UI — the
+        // window then never appears (observed: Keychain.load blocked for
+        // minutes while the main window stayed at Width=0/Height=0 or
+        // offscreen). The wait polls every 50 ms for at most ~2 s, so the
+        // normal case proceeds on the next turn after the window shows.
+        await waitUntilMainWindowVisible()
+        // Startup NEVER touches the Keychain — measured, twice: the
+        // documented suppression APIs both still pop the SecurityAgent
+        // dialog for this item (`kSecUseAuthenticationUIFail` is deprecated
+        // since macOS 11 and ignored; an LAContext with
+        // interactionNotAllowed still blocked). So at launch the only
+        // password source is the debug env var; a stored password is read
+        // only when the user explicitly presses Connect (that click owns
+        // any prompt that may follow).
+        if let envPassword = DebugRPCEnv.password {
+            await connect(password: envPassword, storeInKeychain: false)
+        }
+    }
+
+    /// Returns once the main window is ordered in, or after a ~2 s fallback
+    /// so a missing window can never block auto-connect indefinitely.
+    private func waitUntilMainWindowVisible() async {
+        for _ in 0..<40 {
+            let window = MainWindowRegistry.window ?? NSApp.windows.first {
+                $0.level == .normal
+                    && $0.styleMask.contains(.titled)
+                    && $0.sheetParent == nil
+            }
+            if let window, window.isVisible { return }
+            try? await Task.sleep(for: .milliseconds(50))
         }
     }
 
@@ -262,6 +301,20 @@ final class AppModel {
     }
 
     func connect(password supplied: String?) async {
+        await connect(password: supplied, storeInKeychain: nil)
+    }
+
+    /// Connect with an optional explicit password.
+    ///
+    /// `storeInKeychain` decides whether the Keychain may be WRITTEN (or
+    /// cleared on 401): `nil` derives it from the password's source
+    /// (typed → store; read from Keychain/env → never write back), and the
+    /// startup paths pass `false` explicitly. Startup auto-connect must
+    /// never touch Keychain UI: writing back a keychain-sourced password
+    /// is what popped the authorization dialog on every launch (the
+    /// item's ACL no longer matches the freshly ad-hoc-signed binary, so
+    /// `SecItemUpdate` demanded authentication).
+    func connect(password supplied: String?, storeInKeychain: Bool?) async {
         if case .connected = phase {
             disconnect()
             return
@@ -275,16 +328,27 @@ final class AppModel {
         passwordError = nil
 
         let password: String
-        if let supplied {
+        var persist = false
+        if let debugPassword = DebugRPCEnv.password {
+            // Debug/testing only (`SWIFTTRANSGUI_RPC_PASSWORD`): use the env
+            // password for the whole run and bypass the Keychain entirely —
+            // no load/save/delete below while it is set.
+            password = debugPassword
+        } else if let supplied {
             password = supplied
+            persist = true  // typed by the user (password sheet)
         } else if let stored = Keychain.load(account: endpoint.keychainAccount) {
-            password = stored
+            password = stored  // came FROM the Keychain — never write it back
         } else if let remembered = rememberedPassword {
             password = remembered
+            persist = true
         } else {
             phase = .idle
             showPasswordPrompt = true
             return
+        }
+        if let storeInKeychain {
+            persist = storeInKeychain
         }
 
         let client = TransmissionClient(endpoint: endpoint, password: password)
@@ -292,7 +356,9 @@ final class AppModel {
             let info: SessionInfo = try await client.call(method: "session-get")
             self.client = client
             rememberedPassword = password
-            Keychain.save(password, account: endpoint.keychainAccount)
+            if persist {
+                Keychain.save(password, account: endpoint.keychainAccount)
+            }
             serverVersion = info.version ?? "Transmission"
             rpcVersion = info.rpcVersion ?? 16
             session = info
@@ -301,11 +367,19 @@ final class AppModel {
             startPolling()
             await refresh(sessionRefresh: true)
         } catch let error as RpcError where error == .unauthorized {
-            Keychain.delete(account: endpoint.keychainAccount)
-            rememberedPassword = nil
+            if persist {
+                Keychain.delete(account: endpoint.keychainAccount)
+                rememberedPassword = nil
+                passwordError = "The password was rejected by the server."
+                showPasswordPrompt = true
+            } else {
+                // Startup/non-interactive: no Keychain clearing, no sheet —
+                // the status bar reports the failure instead.
+                passwordError = "The password was rejected by the server."
+                phase = .failed("password rejected by the server")
+                return
+            }
             phase = .idle
-            passwordError = "The password was rejected by the server."
-            showPasswordPrompt = true
         } catch {
             phase = .failed(cleanMessage(error))
         }
@@ -314,7 +388,7 @@ final class AppModel {
     func submitPassword(_ password: String) async {
         showPasswordPrompt = false
         passwordError = nil
-        await connect(password: password)
+        await connect(password: password, storeInKeychain: true)
     }
 
     func cancelPasswordPrompt() {
@@ -643,6 +717,56 @@ final class AppModel {
     func saveColumnCustomization() {
         if let data = try? JSONEncoder().encode(torrentColumnCustomization) {
             UserDefaults.standard.set(data, forKey: Self.columnCustomizationKey)
+        }
+    }
+}
+
+// MARK: - Debug environment overrides
+
+/// Debug/testing only: environment variables that replace the interactive
+/// connection setup so automated runs can connect without the Keychain.
+/// The values are read from the process environment at launch — real
+/// credentials must never be written into the repo, docs or tests.
+enum DebugRPCEnv {
+    /// `SWIFTTRANSGUI_RPC_PASSWORD` — when set to a non-empty value it is
+    /// used as the RPC password for the whole run, and the Keychain is
+    /// bypassed completely while it is set (no load/save/delete).
+    static let password: String? = {
+        guard
+            let value = ProcessInfo.processInfo.environment["SWIFTTRANSGUI_RPC_PASSWORD"],
+            !value.isEmpty
+        else { return nil }
+        return value
+    }()
+
+    /// Applies `SWIFTTRANSGUI_RPC_HOST` ("host" or "host:port") on top of
+    /// `endpoint` at launch, plus the optional `SWIFTTRANSGUI_RPC_USER`,
+    /// `SWIFTTRANSGUI_RPC_PATH` and `SWIFTTRANSGUI_RPC_SSL=1` companions —
+    /// a fresh-defaults instance can then connect without the connections
+    /// dialog. A no-op when `SWIFTTRANSGUI_RPC_HOST` is unset or empty.
+    static func applyEndpointOverride(to endpoint: inout RpcEndpoint) {
+        let env = ProcessInfo.processInfo.environment
+        guard let spec = env["SWIFTTRANSGUI_RPC_HOST"], !spec.isEmpty else { return }
+
+        var host = spec
+        var port = endpoint.port
+        if let colon = spec.lastIndex(of: ":"),
+            let parsedPort = Int(spec[spec.index(after: colon)...]),
+            !spec[..<colon].isEmpty
+        {
+            host = String(spec[..<colon])
+            port = parsedPort
+        }
+        endpoint.host = host
+        endpoint.port = port
+        if let user = env["SWIFTTRANSGUI_RPC_USER"], !user.isEmpty {
+            endpoint.username = user
+        }
+        if let path = env["SWIFTTRANSGUI_RPC_PATH"], !path.isEmpty {
+            endpoint.path = path
+        }
+        if env["SWIFTTRANSGUI_RPC_SSL"] == "1" {
+            endpoint.useSSL = true
         }
     }
 }

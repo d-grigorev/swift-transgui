@@ -59,6 +59,14 @@ struct MainWindow: View {
                 model.addTorrentFiles(torrentFiles)
             }
             .animation(.default, value: model.phase)
+            // Close button / ⌘W → hide to the tray instead of closing. The
+            // background lives here, inside the window's content, rather
+            // than wrapping the WindowGroup root in the App file: with the
+            // representable as a scene-root wrapper, the startup `.task`
+            // raced window creation (compounded by launch-time Keychain
+            // work) and repeatedly left no window at all in testing — in
+            // this placement the window materialized in every run.
+            .background(WindowCloseInterceptor())
     }
 
     /// The panes themselves (split out of `body` so the modifier chain

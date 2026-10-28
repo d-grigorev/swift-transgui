@@ -29,6 +29,19 @@ prompts for it and saves it in the Keychain (service
 `--host host[:port]` and usually `--user <name>` (plus optional `--path`,
 `--ssl`).
 
+### Debug/testing only — environment overrides (never commit values)
+
+- `SWIFTTRANSGUI_RPC_PASSWORD` (non-empty) — used as the RPC password for
+  the run; the Keychain is then bypassed completely (no load/save/delete),
+  see `DebugRPCEnv` in `App/AppModel.swift`.
+- `SWIFTTRANSGUI_RPC_HOST` (`host` or `host:port`) — overrides the endpoint
+  at launch; companions: `SWIFTTRANSGUI_RPC_USER`, `SWIFTTRANSGUI_RPC_PATH`,
+  `SWIFTTRANSGUI_RPC_SSL=1`.
+- Purpose: automated GUI runs connect without the interactive password
+  prompt. Real values (passwords, server addresses) must never be written
+  into the repo, docs or tests — the credential grep gates must stay at 0
+  matches.
+
 ## Architecture
 
 - **TransGUICore** (library target) — no SwiftUI imports:
@@ -139,6 +152,25 @@ prompts for it and saves it in the Keychain (service
     Application options… ⌃F9, Update blocklist, Use alternate bandwidth
     settings F8) + `Key` enum (F-key `KeyEquivalent`s, U+F705…U+F70F;
     always pass `modifiers:` — the default is `.command`).
+  - `App/TraySupport.swift` + `App/WindowCloseInterceptor.swift` — minimize
+    to tray: `TrayStatusController`'s `NSStatusItem` + `NSMenu` status icon
+    (AppKit-anchored drop-down with exactly the toggle *Minimize to tray* /
+    *Open SwiftTransGUI* — `TrayMenuTitle`/`MainWindowVisibility` — and
+    *Quit*; it replaced the `MenuBarExtra` scene because SwiftUI popped the
+    `.menu` popup from a computed status-button frame that went stale or
+    shifted during display reconfiguration — measured menu35 pt below the
+    menu bar, or at the screen corner following a garbage `(0,-11)` frame),
+    `hideMainWindow()` / `showMainWindow()`, `AppDelegate`
+    via `@NSApplicationDelegateAdaptor` (`applicationDidFinishLaunching`
+    installs the tray item — forwarded from SwiftUI's own delegate;
+    `applicationShouldTerminateAfterLastWindowClosed`
+    → false; `applicationShouldHandleReopen` re-keys the window on a dock
+    icon click), and the `NSViewRepresentable` whose window delegate vetoes
+    `windowShouldClose` (close button / ⌘W / File > Close → `orderOut`;
+    delegate chained to SwiftUI's `AppKitWindowController` and re-installed
+    on `didBecomeKey`). The interceptor is a `.background` of `MainWindow`'s
+    root chain — as a scene-root wrapper in the `App` body it raced window
+    creation in testing.
   - `Views/MainWindow.swift` — VSplitView { HSplitView (sidebar | table);
     DetailsPaneView } + status bar, sheets (password, add-torrent, add-link),
     duplicate/error alerts, `.dropDestination(for: URL.self)` for .torrent drops.

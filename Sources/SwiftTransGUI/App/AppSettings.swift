@@ -50,6 +50,16 @@ enum AppSettings {
         set { defaults.set(newValue, forKey: "LinksFromClipboard") }
     }
 
+    // MARK: Tray
+
+    /// Hide the menu-bar tray icon ("Disable tray"). With the tray
+    /// disabled the app exits when the window is closed instead of hiding
+    /// behind the status item (see `CloseBehavior` in TraySupport.swift).
+    static var disableTray: Bool {
+        get { defaults.object(forKey: "DisableTray") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "DisableTray") }
+    }
+
     // MARK: Misc (speed limit menus)
 
     static let defaultSpeeds = "100, 500, 1000, 2000, 5000"

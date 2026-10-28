@@ -74,7 +74,11 @@ struct FileContext {
         return files[index].bytesCompleted ?? 0
     }
 
+    /// Effective priority of a file. An unwanted file is **skip** — the
+    /// checkbox and the priority column both reflect this (reference
+    /// behavior: `wanted == 0` is stored as TR_PRI_SKIP, -1000).
     func priority(_ index: Int) -> Int {
+        guard isWanted(index) else { return -1000 }
         guard index < priorities.count else { return 0 }
         return priorities[index]
     }
